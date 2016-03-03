@@ -28,6 +28,14 @@ class _bool(int):
     def __bytes__(self):
         return self.to_bytes(1, byteorder='big')
 
+class _zero():
+    def __init__(self, value):
+        pass
+    def __str__(self):
+        return ''
+    def __bytes__(self):
+        return b''
+
 class _8bits(int):
     def __new__(cls, value):
         if isinstance(value, str):
@@ -53,6 +61,35 @@ class _string(bytes):
         return bytes.__new__(cls, value)
     def __str__(self):
         return self.decode('utf-8')
+
+class _fqdn(bytes):
+    def __new__(cls, value):
+        fqdn = b''
+        if isinstance(value, str):
+            value = value.split()
+        if isinstance(value, (tuple, list)):
+            for name in value:
+                ds = name.split('.')
+                if ds[-1] != '':
+                    ds.append('')
+                for d in ds:
+                    dn = _string(d)
+                    fqdn += bytes(_8bits(len(dn))) + dn
+        elif isinstance(value, bytes):
+            fqdn = value
+        return bytes.__new__(cls, fqdn)
+    def __str__(self):
+        st = self
+        names = []
+        name = []
+        while st:
+            len = st[0]
+            name.append(st[1:len+1])
+            if len == 0:
+                names.append(b'.'.join(name).decode('utf-8'))
+                name = []
+            st = st[len+1:]
+        return ' '.join(names)
 
 class _bytes(bytes):
     def __new__(cls, value):
@@ -86,7 +123,7 @@ def _dclist(dictionary={}):
             self._data = {}
             if isinstance(value, dict):
                 for field, opt in value.items():
-                    tmpl = dictionary.get(field, Option(code=field, data=_string))
+                    tmpl = dictionary.get(rdictionary.get(field, field), Option(code=field, data=_string))
                     self._data[tmpl.code] = tmpl.data(opt)
             if isinstance(value, bytes):
                 while value:
@@ -155,7 +192,7 @@ class _ipv4plus(tuple):
 class _ipv4vlsm(ipaddress.IPv4Network):
     def __init__(self, value):
         if isinstance(value, bytes):
-            prefixlen = _8bits(value[:1])
+            prefixlen = value[0]
             netlen = - int( - prefixlen // 8 )
             net = value[1:1 + netlen] + bytes(4 - netlen)
             super().__init__(net)
@@ -275,14 +312,16 @@ OPTION['ntp_servers'] = Option(code=42, data=_ipv4plus)
 OPTION['vendor_specific'] = Option(code=43, data=_string)
 OPTION['nbns'] = Option(code=44, data=_ipv4plus)
 OPTION['nbdd'] = Option(code=45, data=_ipv4plus)
-OPTION['nb_node_type'] = Option(code=46, data=_8bits)
+OPTION['nb_node_type'] = Option(code=46, data=_dict({
+        'B-node': 1, 'P-node': 2, 'M-node': 4, 'H-node': 8
+    }))
 OPTION['nb_scope'] = Option(code=47, data=_string)
 OPTION['x_window_system_font_server'] = Option(code=48, data=_ipv4plus)
 OPTION['x_window_system_display_manager'] = Option(code=49, data=_ipv4plus)
 # DHCP extensions
 OPTION['request_ip_address'] = Option(code=50, data=_ipv4)
 OPTION['ip_address_lease_time'] = Option(code=51, data=_32bits)
-OPTION['overload'] = Option(code=52, data=_8bits)
+OPTION['overload'] = Option(code=52, data=_dict({'file': 1, 'sname': 2, 'both': 3}))
 OPTION['dhcp_message_type'] = Option(code=53, data=_dict({
         'DHCP_DISCOVER':1 , 'DHCP_OFFER':2 , 'DHCP_REQUEST':3 ,
         'DHCP_DECLINE':4 , 'DHCP_ACK':5 , 'DHCP_NACK':6 ,
@@ -298,12 +337,24 @@ OPTION['vendor_class_identifier'] = Option(code=60, data=_string)
 OPTION['client_identifier'] = Option(code=61, data=_chaddr)
 # Add from RFC 2132
 OPTION['netware_ip_domain_name'] = Option(code=62, data=_string)
-OPTION['netware_ip_sub_options'] = Option(code=63, data='RFC2242')
+OPTION['netware_ip_sub_options'] = Option(code=63, data=_dclist({
+        'NWIP_DOES_NOT_EXIST': Option(code=1, data=_zero),
+        'NWIP_EXIST_IN_OPTIONS_AREA': Option(code=2, data=_zero),
+        'NWIP_EXIST_IN_SNAME_FILE': Option(code=3, data=_zero),
+        'NWIP_EXIST_BUT_TOO_BIG': Option(code=4, data=_zero),
+        'NSQ_BROADCAST': Option(code=5, data=_bool),
+        'PREFERRED_DSS': Option(code=6, data=_ipv4plus),
+        'NEAREST_NWIP_SERVER': Option(code=7, data=_ipv4plus),
+        'AUTORETRIES': Option(code=8, data=_8bits),
+        'AUTORETRY_SECS': Option(code=9, data=_8bits),
+        'NWIP_1_1': Option(code=10, data=_bool),
+        'PRIMARY_DSS': Option(code=11, data=_ipv4),
+    }))
 OPTION['nis+_domain'] = Option(code=64, data=_string)
 OPTION['nis+_servers'] = Option(code=65, data=_ipv4plus)
 OPTION['tftp_server_name'] = Option(code=66, data=_string)
 OPTION['bootfile_name'] = Option(code=67, data=_string)
-OPTION['mobile_ip_home_agent'] = Option(code=68, data=_ipv4)
+OPTION['mobile_ip_home_agent'] = Option(code=68, data=_ipv4plus)
 OPTION['smtp_servers'] = Option(code=69, data=_ipv4plus)
 OPTION['pop_servers'] = Option(code=70, data=_ipv4plus)
 OPTION['nntp_servers'] = Option(code=71, data=_ipv4plus)
@@ -312,22 +363,21 @@ OPTION['default_finger_server'] = Option(code=73, data=_ipv4plus)
 OPTION['default_irc_server'] = Option(code=74, data=_ipv4plus)
 OPTION['streettalk_server'] = Option(code=75, data=_ipv4plus)
 OPTION['streettalk_directory_assistance_server'] = Option(code=76, data=_ipv4plus)
-OPTION['user_class'] = Option(code=77, data='RFC3004')
+OPTION['user_class'] = Option(code=77, data=_list)
 OPTION['directory_agent'] = Option(code=78, data='RFC2610')
 OPTION['service_scope'] = Option(code=79, data='RFC2610')
 OPTION['rapid_commit'] = Option(code=80, data='null')
-OPTION['client_fqdn'] = Option(code=81, data=_string)
+OPTION['client_fqdn'] = Option(code=81, data=_string) # RFC4702
 OPTION['relay_agent'] = Option(code=82, data=_dclist({
         'CIRCUIT-ID': Option(code=1, data=_string),
         'REMOTE-ID': Option(code=2, data=_string)
     }))
 OPTION['internet_storage_name_service'] = Option(code=83, data='RFC4174')
-OPTION['84'] = Option(code=84, data=_bytes)
 OPTION['nds_server'] = Option(code=85, data=_ipv4plus)
-OPTION['nds_tree_name'] = Option(code=86, data='RFC2241')
-OPTION['nds_context'] = Option(code=87, data='RFC2241')
-OPTION['88'] = Option(code=88, data=_bytes)
-OPTION['89'] = Option(code=89, data=_bytes)
+OPTION['nds_tree_name'] = Option(code=86, data=_string)
+OPTION['nds_context'] = Option(code=87, data=_string)
+OPTION['BCMCS Controller Domain Name list'] = Option(code=88, data=_fqdn)
+OPTION['BCMCS Controller IPv4 address option'] = Option(code=89, data=_ipv4plus)
 OPTION['authentication'] = Option(code=90, data='RFC3118')
 OPTION['client_last_transaction_time'] = Option(code=91, data='RFC4388')
 OPTION['associated_ip'] = Option(code=92, data=_ipv4plus)
@@ -468,14 +518,16 @@ class Client(DHCP):
     def HandleDhcpOffer(self, packet):
         self.SendPacket({
             'dhcp_message_type': 'DHCP_REQUEST',
-            'request_ip_address': packet['yiaddr'],
-            'server_identifier': packet['server_identifier']
+            'request_ip_address': packet.get('yiaddr'),
+            'server_identifier': packet.get('server_identifier')
         })
 
     def HandleDhcpAck(self, packet):
         self.__lock.set()
 
 def main():
+    #use encapsulated vendor-specific extensions:
+    OPTION['vendor_specific'] = Option(code=43, data=_list)
     client = Client({
             'chaddr': '00:1e:52:82:15:b7',
 #            'listen':"192.168.1.13",
@@ -483,6 +535,7 @@ def main():
 #            'client_identifier':'test123',
             'parameter_request_list': [50, 51, 'classless_static_route'],
             'relay_agent': {'CIRCUIT-ID':'vci', 'REMOTE-ID':'vpi'},
+            'vendor_specific': {1:'vs1', 2:'vs2'},
             })
     client.SendPacket({'dhcp_message_type': 'DHCP_DISCOVER'})
     client.Wait()
