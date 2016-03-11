@@ -43,16 +43,22 @@ class _8bits(int):
         elif isinstance(value, bytes):
             value = int.from_bytes(value, byteorder='big')
         return int.__new__(cls, value)
+    def __len__(self):
+        return 1
     def __bytes__(self):
-        return self.to_bytes(1, byteorder='big')
+        return self.to_bytes(len(self), byteorder='big')
 
 class _16bits(_8bits):
-    def __bytes__(self):
-        return self.to_bytes(2, byteorder='big')
+    def __len__(self):
+        return 2
+
+class _24bits(_8bits):
+    def __len__(self):
+        return 3
 
 class _32bits(_8bits):
-    def __bytes__(self):
-        return self.to_bytes(4, byteorder='big')
+    def __len__(self):
+        return 4
 
 class _string(bytes):
     def __new__(cls, value):
@@ -108,7 +114,7 @@ def _dict(dictionary):
                 self._data = _8bits(value)
             elif isinstance(value, str):
                 self._data = _8bits(dictionary.get(value.upper(), None))
-        def __str__(self):
+        def __repr__(self):
             return list(dictionary.keys())[list(dictionary.values()).index(self._data)]
         def __bytes__(self):
             return bytes(self._data)
@@ -116,8 +122,9 @@ def _dict(dictionary):
             return self._data == other or self._data == dictionary.get(other, None)
     return _cdict
 
-def _dclist(dictionary={}):
+def _dclist(dictionary={}, hclass=_8bits):
     rdictionary = {val.code: key for key, val in dictionary.items()}
+    hlen = len(hclass(0))
     class _clist():
         def __init__(self, value):
             self._data = {}
@@ -127,21 +134,21 @@ def _dclist(dictionary={}):
                     self._data[tmpl.code] = tmpl.data(opt)
             if isinstance(value, bytes):
                 while value:
-                    code = _8bits(value[:1])
+                    code = hclass(value[:hlen])
                     tmpl = dictionary.get(rdictionary.get(code), Option(code=code, data=_string))
                     if tmpl.data:
-                        length = _8bits(value[1:2])
+                        length = hclass(value[hlen:hlen+hlen])
                         if isinstance(tmpl.data, type):
-                            self._data[code] = tmpl.data(value[2:2+length])
+                            self._data[code] = tmpl.data(value[2*hlen:2*hlen+length])
                         else:
-                            self._data[code] = _bytes(value[2:2+length])
-                        value = value[2+length:]
+                            self._data[code] = _bytes(value[2*hlen:2*hlen+length])
+                        value = value[2*hlen+length:]
                     else:
-                        value = value[1:]
+                        value = value[hlen:]
         def __str__(self):
             return ', '.join(['%s: %s' % (rdictionary.get(field, field), opt) for field, opt in self._data.items()])
         def __bytes__(self):
-            return b''.join([struct.pack('!2B', field, len(bytes(opt))) + bytes(opt) for field, opt in self._data.items()])
+            return b''.join([bytes(hclass(field)) + bytes(hclass(len(bytes(opt)))) + bytes(opt) for field, opt in self._data.items()])
         def __iter__(self):
             for field, opt in self._data.items():
                 yield [rdictionary.get(field, field), opt]
@@ -226,6 +233,10 @@ class _ipv4route(tuple):
         return ', '.join(["%s via %s" % (route[0], route[1]) for route in self])
     def __bytes__(self):
         return b''.join([bytes(route[0]) + bytes(route[1]) for route in self])
+
+class _ipv6(ipaddress.IPv6Address):
+    def __bytes__(self):
+        return self.packed
 
 HEADER_FIELDS = OrderedDict()
 # Operation code, 1 request; 2 reply message
@@ -447,7 +458,7 @@ class DHCP(object):
         except (socket.error) as msg:
             sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_BROADCAST : '+str(msg))
 
-        try : 
+        try :
             if so_reuseaddr :
                 dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         except (socket.error) as msg:
@@ -478,6 +489,90 @@ class DHCP(object):
                     for hook in self.__hook:
                         if hook.cmp(packet):
                             hook.handler(packet)
+
+OPTION6 = {}
+OPTION6['CLIENTID'] = Option(code=1, data=_bytes)
+OPTION6['SERVERID'] = Option(code=2, data=_bytes)
+OPTION6['IA_NA'] = Option(code=3, data=_bytes)
+OPTION6['IA_TA'] = Option(code=4, data=_bytes)
+OPTION6['IAADDR'] = Option(code=5, data=_bytes)
+OPTION6['ORO'] = Option(code=6, data=_bytes)
+OPTION6['PREFERENCE'] = Option(code=7, data=_bytes)
+OPTION6['ELAPSED_TIME'] = Option(code=8, data=_bytes)
+OPTION6['RELAY_MSG'] = Option(code=9, data=_bytes)
+OPTION6['AUTH'] = Option(code=11, data=_bytes)
+OPTION6['UNICAST'] = Option(code=12, data=_bytes)
+OPTION6['STATUS_CODE'] = Option(code=13, data=_bytes)
+OPTION6['RAPID_COMMIT'] = Option(code=14, data=_bytes)
+OPTION6['USER_CLASS'] = Option(code=15, data=_bytes)
+OPTION6['VENDOR_CLASS'] = Option(code=16, data=_bytes)
+OPTION6['VENDOR_OPTS'] = Option(code=17, data=_bytes)
+OPTION6['INTERFACE_ID'] = Option(code=18, data=_bytes)
+OPTION6['RECONF_MSG'] = Option(code=19, data=_bytes)
+OPTION6['RECONF_ACCEPT'] = Option(code=20, data=_bytes)
+
+_optlistv6 = _dclist(OPTION6, _16bits)
+class DHCPv6(DHCP):
+    @staticmethod
+    def serialize(option):
+        data += bytes(_optlistv6(option))
+        return data
+
+    @staticmethod
+    def deserialize(data):
+        option = OrderedDict()
+
+        option['msg-type'] = _dict({
+            'SOLICIT':1, 'ADVERTISE':2, 'REQUEST':3, 'CONFIRM':4,
+            'RENEW':5, 'REBIND':6, 'REPLY':7, 'RELEASE':8, 'DECLINE':9,
+            'RECONFIGURE':10, 'INFORMATION-REQUEST':11, 'RELAY-FORW':12,
+            'RELAY-REPL':13,
+        })(data[0])
+        if option['msg-type'] == 'RELAY-FORW' or option['msg-type'] == 'RELAY-REPL':
+            option['hop-count'] = _8bits(data[1])
+            option['link-address'] = _ipv6(data[2:18])
+            option['peer-address'] = _ipv6(data[18:34])
+            option.update(_optlistv6(data[34:]))
+        else:
+            option['transaction-id'] = _24bits(data[1:4])
+            option.update(_optlistv6(data[4:]))
+
+        return option
+
+    # Networking stuff
+    def CreateSocket(self, so_broadcast, so_reuseaddr) :
+        dhcp_socket = None
+        try :
+            dhcp_socket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        except (socket.error) as msg:
+            sys.stderr.write('pydhcplib.DhcpNetwork socket creation error : '+str(msg))
+
+        try :
+            if so_broadcast :
+                dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
+        except (socket.error) as msg:
+            sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_BROADCAST : '+str(msg))
+
+        try :
+            if so_reuseaddr :
+                dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        except (socket.error) as msg:
+            sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_REUSEADDR : '+str(msg))
+
+        return dhcp_socket
+
+    def BindToAddress(self, listen_address="0.0.0.0", listen_port=67):
+        try :
+            self.dhcp_socket.bind((listen_address, listen_port))
+        except (socket.error) as msg:
+            sys.stderr.write( 'pydhcplib.DhcpNetwork.BindToAddress error : '+str(msg))
+
+    def SendDhcpPacketTo(self, packet, _ip, _port):
+        return self.dhcp_socket.sendto(packet,(_ip,_port))
+
+a = DHCPv6()
+print(a.deserialize(b'\x01\x00\x00\x02\x00\x01\x00\x0e\x00\x01\x00\x01\x1em|/\x00\x0c\x01\x02\x03\x04\x00\x03\x00\x0c\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x15\x18\x00\x06\x00\x04\x00\x17\x00\x18\x00\x08\x00\x02\x00\x00'))
+print(a.deserialize(b'\x0c\x01 \x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01 \x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08\x00\x02\x00\x00'))
 
 class Client(DHCP):
     def __init__(self, options):
