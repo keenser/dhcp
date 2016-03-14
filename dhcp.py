@@ -15,6 +15,9 @@ import os
 Field = namedtuple('Field', ('default', 'location', 'fmt', 'data'))
 Option = namedtuple('Option', ('code', 'data'))
 Hook = namedtuple('Hook', ('cmp', 'handler'))
+HEADER_FIELDS = OrderedDict()
+OPTION = {}
+OPTION6 = {}
 
 class _bool(int):
     def __new__(cls, value=0):
@@ -123,19 +126,19 @@ def _dict(dictionary):
     return _cdict
 
 def _dclist(dictionary={}, hclass=_8bits):
-    rdictionary = {val.code: key for key, val in dictionary.items()}
     hlen = len(hclass(0))
     class _clist():
         def __init__(self, value):
+            self.rdictionary = {val.code: key for key, val in dictionary.items()}
             self._data = {}
             if isinstance(value, dict):
                 for field, opt in value.items():
-                    tmpl = dictionary.get(rdictionary.get(field, field), Option(code=field, data=_string))
+                    tmpl = dictionary.get(self.rdictionary.get(field, field), Option(code=field, data=_string))
                     self._data[tmpl.code] = tmpl.data(opt)
             if isinstance(value, bytes):
                 while value:
                     code = hclass(value[:hlen])
-                    tmpl = dictionary.get(rdictionary.get(code), Option(code=code, data=_string))
+                    tmpl = dictionary.get(self.rdictionary.get(code), Option(code=code, data=_string))
                     if tmpl.data:
                         length = hclass(value[hlen:hlen+hlen])
                         if isinstance(tmpl.data, type):
@@ -146,27 +149,33 @@ def _dclist(dictionary={}, hclass=_8bits):
                     else:
                         value = value[hlen:]
         def __str__(self):
-            return ', '.join(['%s: %s' % (rdictionary.get(field, field), opt) for field, opt in self._data.items()])
+            return ', '.join('%s: %s' % (self.rdictionary.get(field, field), opt) for field, opt in self._data.items())
         def __bytes__(self):
-            return b''.join([bytes(hclass(field)) + bytes(hclass(len(bytes(opt)))) + bytes(opt) for field, opt in self._data.items()])
+            return b''.join(bytes(hclass(field)) + bytes(hclass(len(bytes(opt)))) + bytes(opt) for field, opt in self._data.items())
         def __iter__(self):
             for field, opt in self._data.items():
-                yield [rdictionary.get(field, field), opt]
+                yield [self.rdictionary.get(field, field), opt]
     return _clist
 
-_list = _dclist()
-
-class _prlist(tuple):
-    def __new__(cls, value):
-        if isinstance(value, bytes):
-            value = list(value)
-        elif isinstance(value, (tuple, list)):
-            value = [int(OPTION.get(str(i).lower(), Option(code=i, data=None)).code) for i in value]
-        elif isinstance(value, str):
-            value = [int(OPTION.get(str(i).lower(), Option(code=i, data=None)).code) for i in value.split()]
-        return tuple.__new__(cls, value)
-    def __str__(self):
-        return ' '.join([list(OPTION.keys())[[i.code for i in OPTION.values()].index(code)] for code in self])
+def _dprlist(dictionary={}, hclass=_8bits):
+    hlen = len(hclass(0))
+    class _cprlist(tuple):
+        def __new__(cls, value):
+            if isinstance(value, bytes):
+                value = [hclass(value[i:i+hlen]) for i in range(0, len(value), hlen)]
+            elif isinstance(value, (tuple, list)):
+                value = [int(dictionary.get(str(i).lower(), Option(code=i, data=None)).code) for i in value]
+            elif isinstance(value, str):
+                value = [int(dictionary.get(str(i).lower(), Option(code=i, data=None)).code) for i in value.split()]
+            return tuple.__new__(cls, value)
+        def __init__(self, value):
+            super().__init__()
+            self.rdictionary = {val.code: key for key, val in dictionary.items()}
+        def __bytes__(self):
+            return b''.join(bytes(hclass(i)) for i in self)
+        def __str__(self):
+            return ' '.join(self.rdictionary.get(code, str(code)) for code in self)
+    return _cprlist
 
 class _chaddr(bytes):
     def __new__(cls, value):
@@ -238,7 +247,10 @@ class _ipv6(ipaddress.IPv6Address):
     def __bytes__(self):
         return self.packed
 
-HEADER_FIELDS = OrderedDict()
+_list = _dclist()
+_optlist = _dclist(OPTION)
+_prlist = _dprlist(OPTION)
+
 # Operation code, 1 request; 2 reply message
 HEADER_FIELDS['op'] = Field(default=b'\x01', location=0, fmt='!1s', data=_dict({'ERROR_UNDEF':0 , 'BOOTREQUEST':1 , 'BOOTREPLY':2}))
 # 1 is for hardware type ethernet
@@ -270,7 +282,6 @@ HEADER_FIELDS['file'] = Field(default=b'', location=108, fmt='!128s', data=_stri
 # RFC: 1048p2
 HEADER_FIELDS['magic_cookie'] = Field(default=b'\x63\x82\x53\x63', location=236, fmt='!4s', data=_bytes)
 
-OPTION = {}
 OPTION['pad'] = Option(code=0, data=None)
 # Vendor Extension
 OPTION['subnet_mask'] = Option(code=1, data=_ipv4)
@@ -412,8 +423,6 @@ OPTION['vendor_class'] = Option(code=124, data=_bytes)
 OPTION['vendor_specific'] = Option(code=125, data=_bytes)
 OPTION['end'] = Option(code=255, data=None)
 
-_optlist = _dclist(OPTION)
-
 class DHCP(object):
     def __init__(self):
         self.__hook = []
@@ -470,7 +479,7 @@ class DHCP(object):
         try :
             self.dhcp_socket.bind((listen_address, listen_port))
         except (socket.error) as msg:
-            sys.stderr.write( 'pydhcplib.DhcpNetwork.BindToAddress error : '+str(msg))
+            sys.stderr.write('pydhcplib.DhcpNetwork.BindToAddress error : '+str(msg))
 
     def SendDhcpPacketTo(self, packet, _ip, _port):
         return self.dhcp_socket.sendto(packet,(_ip,_port))
@@ -490,7 +499,6 @@ class DHCP(object):
                         if hook.cmp(packet):
                             hook.handler(packet)
 
-OPTION6 = {}
 OPTION6['CLIENTID'] = Option(code=1, data=_bytes)
 OPTION6['SERVERID'] = Option(code=2, data=_bytes)
 OPTION6['IA_NA'] = Option(code=3, data=_bytes)
@@ -512,6 +520,8 @@ OPTION6['RECONF_MSG'] = Option(code=19, data=_bytes)
 OPTION6['RECONF_ACCEPT'] = Option(code=20, data=_bytes)
 
 _optlistv6 = _dclist(OPTION6, _16bits)
+_prlistv6 = _dprlist(OPTION6, _16bits)
+
 class DHCPv6(DHCP):
     @staticmethod
     def serialize(option):
