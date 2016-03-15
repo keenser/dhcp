@@ -135,7 +135,7 @@ def _dclist(dictionary={}, hclass=_8bits):
                 for field, opt in value.items():
                     tmpl = dictionary.get(self.rdictionary.get(field, field), Option(code=field, data=_string))
                     self._data[tmpl.code] = tmpl.data(opt)
-            if isinstance(value, bytes):
+            elif isinstance(value, bytes):
                 while value:
                     code = hclass(value[:hlen])
                     tmpl = dictionary.get(self.rdictionary.get(code), Option(code=code, data=_string))
@@ -157,9 +157,9 @@ def _dclist(dictionary={}, hclass=_8bits):
                 yield [self.rdictionary.get(field, field), opt]
     return _clist
 
-def _dprlist(dictionary={}, hclass=_8bits):
+def _tmplprlist(dictionary={}, hclass=_8bits):
     hlen = len(hclass(0))
-    class _cprlist(tuple):
+    class _prlist(tuple):
         def __new__(cls, value):
             if isinstance(value, bytes):
                 value = [hclass(value[i:i+hlen]) for i in range(0, len(value), hlen)]
@@ -175,7 +175,7 @@ def _dprlist(dictionary={}, hclass=_8bits):
             return b''.join(bytes(hclass(i)) for i in self)
         def __str__(self):
             return ' '.join(self.rdictionary.get(code, str(code)) for code in self)
-    return _cprlist
+    return _prlist
 
 class _chaddr(bytes):
     def __new__(cls, value):
@@ -201,9 +201,9 @@ class _ipv4plus(tuple):
             value = [ipaddress.IPv4Address(value[i:i+4]) for i in range(0, len(value), 4)]
         return tuple.__new__(cls, value)
     def __str__(self):
-        return ' '.join([str(i) for i in self])
+        return ' '.join(str(i) for i in self)
     def __bytes__(self):
-        return b''.join([i.packed for i in self])
+        return b''.join(i.packed for i in self)
 
 class _ipv4vlsm(ipaddress.IPv4Network):
     def __init__(self, value):
@@ -239,9 +239,9 @@ class _ipv4route(tuple):
                 value = value[netlen + 4:]
         return tuple.__new__(cls, routelist)
     def __str__(self):
-        return ', '.join(["%s via %s" % (route[0], route[1]) for route in self])
+        return ', '.join("%s via %s" % (route[0], route[1]) for route in self)
     def __bytes__(self):
-        return b''.join([bytes(route[0]) + bytes(route[1]) for route in self])
+        return b''.join(bytes(route[0]) + bytes(route[1]) for route in self)
 
 class _ipv6(ipaddress.IPv6Address):
     def __bytes__(self):
@@ -249,7 +249,8 @@ class _ipv6(ipaddress.IPv6Address):
 
 _list = _dclist()
 _optlist = _dclist(OPTION)
-_prlist = _dprlist(OPTION)
+_prlist = _tmplprlist(OPTION)
+_16bitsplus = _tmplprlist({}, _16bits)
 
 # Operation code, 1 request; 2 reply message
 HEADER_FIELDS['op'] = Field(default=b'\x01', location=0, fmt='!1s', data=_dict({'ERROR_UNDEF':0 , 'BOOTREQUEST':1 , 'BOOTREPLY':2}))
@@ -309,7 +310,7 @@ OPTION['policy_filter'] = Option(code=21, data=_ipv4plus)
 OPTION['maximum_datagram_reassembly_size'] = Option(code=22, data=_16bits)
 OPTION['default_ip_time-to-live'] = Option(code=23, data=_8bits)
 OPTION['path_mtu_aging_timeout'] = Option(code=24, data=_32bits)
-OPTION['path_mtu_table'] = Option(code=25, data=_16bits) #fixit _16bitsplus
+OPTION['path_mtu_table'] = Option(code=25, data=_16bitsplus)
 # IP layer parameters per interface
 OPTION['interface_mtu'] = Option(code=26, data=_16bits)
 OPTION['all_subnets_are_local'] = Option(code=27, data=_bool)
@@ -388,7 +389,7 @@ OPTION['streettalk_directory_assistance_server'] = Option(code=76, data=_ipv4plu
 OPTION['user_class'] = Option(code=77, data=_list)
 OPTION['directory_agent'] = Option(code=78, data='RFC2610')
 OPTION['service_scope'] = Option(code=79, data='RFC2610')
-OPTION['rapid_commit'] = Option(code=80, data='null')
+OPTION['rapid_commit'] = Option(code=80, data=_zero)
 OPTION['client_fqdn'] = Option(code=81, data=_string) # RFC4702
 OPTION['relay_agent'] = Option(code=82, data=_dclist({
         'CIRCUIT-ID': Option(code=1, data=_string),
@@ -520,7 +521,7 @@ OPTION6['RECONF_MSG'] = Option(code=19, data=_bytes)
 OPTION6['RECONF_ACCEPT'] = Option(code=20, data=_bytes)
 
 _optlistv6 = _dclist(OPTION6, _16bits)
-_prlistv6 = _dprlist(OPTION6, _16bits)
+_prlistv6 = _tmplprlist(OPTION6, _16bits)
 
 class DHCPv6(DHCP):
     @staticmethod
@@ -641,6 +642,7 @@ def main():
             'parameter_request_list': [50, 51, 'classless_static_route'],
             'relay_agent': {'CIRCUIT-ID':'vci', 'REMOTE-ID':'vpi'},
             'vendor_specific': {1:'vs1', 2:'vs2'},
+            'path_mtu_table': "1000 2000",
             })
     client.SendPacket({'dhcp_message_type': 'DHCP_DISCOVER'})
     client.Wait()
