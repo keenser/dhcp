@@ -10,7 +10,6 @@ import sys
 import socket
 import select
 import os
-#import codecs # v3.4
 
 Field = namedtuple('Field', ('default', 'location', 'fmt', 'data'))
 Option = namedtuple('Option', ('code', 'data'))
@@ -103,11 +102,12 @@ class _fqdn(bytes):
 class _bytes(bytes):
     def __new__(cls, value):
         if isinstance(value, str):
-            value = value.encode('utf-8')
+            value = bytes(int(i) for i in value.split('.'))
         return bytes.__new__(cls, value)
+    def __repr__(self):
+        return self.__str__()
     def __str__(self):
-        #return '0x' + codecs.encode(self, 'hex').decode() # v3.4
-        return '0x'+self.hex()
+        return '.'.join(map(lambda x: "%02d"%x, self))
 
 def _dict(dictionary):
     class _cdict():
@@ -183,9 +183,7 @@ class _chaddr(bytes):
             value = bytes.fromhex(value.replace(':', ''))
         return bytes.__new__(cls, value)
     def __str__(self):
-        #return ':'.join(codecs.encode(self[i:i+1], 'hex').decode() for i in range(0, len(self))) # v3.4
         return ':'.join(map(lambda x: "%02x"%x, self))
-        #return ':'.join(self[i:i+1].hex() for i in range(0, len(self)))
 
 class _ipv4(ipaddress.IPv4Address):
     def __bytes__(self):
