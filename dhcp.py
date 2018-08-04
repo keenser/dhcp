@@ -19,6 +19,10 @@ OPTION = {}
 OPTION6 = {}
 
 class _bool(int):
+    '''
+    Input: _bool(True) _bool('True') _bool(b'0x01')
+    Outupt: b'\x01'
+    '''
     def __new__(cls, value=0):
         if isinstance(value, str):
             value = {'FALSE': 0, 'TRUE':1}[value.upper()]
@@ -71,6 +75,10 @@ class _string(bytes):
         return self.decode('utf-8')
 
 class _fqdn(bytes):
+    '''
+    Input: _fqdn(['example.com.', 'test.org'])
+    Outupt: b'\x07example\x03com\x00\x04test\x03org\x00'
+    '''
     def __new__(cls, value):
         fqdn = b''
         if isinstance(value, str):
@@ -107,9 +115,13 @@ class _bytes(bytes):
     def __repr__(self):
         return self.__str__()
     def __str__(self):
-        return '.'.join(map(lambda x: "%02d"%x, self))
+        return '.'.join("%02d"%i for i in self)
 
 def _dict(dictionary):
+    '''
+    Input: _dict({'A':1, 'B':2})('A')
+    Outupt b'\x01'
+    '''
     class _cdict():
         def __init__(self, value=None):
             self._data = int()
@@ -126,6 +138,13 @@ def _dict(dictionary):
     return _cdict
 
 def _dclist(dictionary={}, hclass=_8bits):
+    '''
+    Input: _dclist({
+                'CIRCUIT-ID': Option(code=1, data=_string),
+                'REMOTE-ID': Option(code=2, data=_string)
+            })({'CIRCUIT-ID':'AA', 2: 'BBB'})
+    Output: b'\x01\x02AA\x02\x03BBB'
+    '''
     hlen = len(hclass(0))
     class _clist():
         def __init__(self, value):
@@ -158,15 +177,22 @@ def _dclist(dictionary={}, hclass=_8bits):
     return _clist
 
 def _tmplprlist(dictionary={}, hclass=_8bits):
+    '''
+    Used for parameter_request_list(option 55) and path_mtu_table(option 25)
+    Input: _tmplprlist({
+                'VALUE5':  Option(code=5, data=_string)
+            })([1, 'VALUE5', 6])
+    Output: b'\x01\x05\x06'
+    '''
     hlen = len(hclass(0))
     class _prlist(tuple):
         def __new__(cls, value):
             if isinstance(value, bytes):
                 value = [hclass(value[i:i+hlen]) for i in range(0, len(value), hlen)]
             elif isinstance(value, (tuple, list)):
-                value = [int(dictionary.get(str(i).lower(), Option(code=i, data=None)).code) for i in value]
+                value = [int(dictionary.get(str(i), Option(code=i, data=None)).code) for i in value]
             elif isinstance(value, str):
-                value = [int(dictionary.get(str(i).lower(), Option(code=i, data=None)).code) for i in value.split()]
+                value = [int(dictionary.get(str(i), Option(code=i, data=None)).code) for i in value.split()]
             return tuple.__new__(cls, value)
         def __init__(self, value):
             super().__init__()
@@ -183,7 +209,7 @@ class _chaddr(bytes):
             value = bytes.fromhex(value.replace(':', ''))
         return bytes.__new__(cls, value)
     def __str__(self):
-        return ':'.join(map(lambda x: "%02x"%x, self))
+        return ':'.join("%02x"%i for i in self)
 
 class _ipv4(ipaddress.IPv4Address):
     def __bytes__(self):
@@ -192,16 +218,16 @@ class _ipv4(ipaddress.IPv4Address):
 class _ipv4plus(tuple):
     def __new__(cls, value):
         if isinstance(value, str):
-            value = [ipaddress.IPv4Address(i) for i in value.split()]
+            value = [_ipv4(i) for i in value.split()]
         elif isinstance(value, (tuple, list)):
-            value = [ipaddress.IPv4Address(i) for i in value]
+            value = [_ipv4(i) for i in value]
         elif isinstance(value, bytes):
-            value = [ipaddress.IPv4Address(value[i:i+4]) for i in range(0, len(value), 4)]
+            value = [_ipv4(value[i:i+4]) for i in range(0, len(value), 4)]
         return tuple.__new__(cls, value)
     def __str__(self):
         return ' '.join(str(i) for i in self)
     def __bytes__(self):
-        return b''.join(i.packed for i in self)
+        return b''.join(bytes(i) for i in self)
 
 class _ipv4vlsm(ipaddress.IPv4Network):
     def __init__(self, value):
@@ -244,6 +270,25 @@ class _ipv4route(tuple):
 class _ipv6(ipaddress.IPv6Address):
     def __bytes__(self):
         return self.packed
+
+class _vendorlist():
+    '''
+    Input: _vendorlist([35265, {1:'mes'}])
+    Output: b'\x00\x00\x89\xc1\x05\x01\x03mes'
+    '''
+    def __init__(self, value):
+        if isinstance(value, (tuple, list)):
+            self.option_code = _32bits(value[0])
+            self.options = _list(value[1])
+            self.option_len = _8bits(len(bytes(self.options)))
+        elif isinstance(value, bytes):
+            self.option_code = _32bits(value[:4])
+            self.option_len = _8bits(value[4:5])
+            self.options = _list(value[5:5+self.option_len])
+    def __str__(self):
+        return '%s: %s' % (self.option_code, self.options)
+    def __bytes__(self):
+        return bytes(self.option_code) + bytes(self.option_len) + bytes(self.options)
 
 _list = _dclist()
 _optlist = _dclist(OPTION)
@@ -419,13 +464,13 @@ OPTION['classless_static_route'] = Option(code=121, data=_ipv4route)
 OPTION['cablelabs_client_configuration'] = Option(code=122, data=_bytes)
 OPTION['geoconf'] = Option(code=123, data=_bytes)
 OPTION['vendor_class'] = Option(code=124, data=_bytes)
-OPTION['vendor_specific'] = Option(code=125, data=_bytes)
+OPTION['vi-vendor_specific'] = Option(code=125, data=_vendorlist)
 OPTION['end'] = Option(code=255, data=None)
 
 class DHCP(object):
-    def __init__(self):
+    def __init__(self, eth):
         self.__hook = []
-        self.dhcp_socket = self.CreateSocket(True, False)
+        self.dhcp_socket = self.CreateSocket(True, False, eth)
 
     @staticmethod
     def serialize(option):
@@ -453,26 +498,34 @@ class DHCP(object):
         return option
 
     # Networking stuff
-    def CreateSocket(self, so_broadcast, so_reuseaddr) :
-        dhcp_socket = None
+    def CreateSocket(self, so_broadcast, so_reuseaddr, so_eth) :
+        sock = None
         try :
-            dhcp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         except (socket.error) as msg:
             sys.stderr.write('pydhcplib.DhcpNetwork socket creation error : '+str(msg))
 
         try :
             if so_broadcast :
-                dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
+                sock.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
         except (socket.error) as msg:
             sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_BROADCAST : '+str(msg))
 
         try :
             if so_reuseaddr :
-                dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         except (socket.error) as msg:
             sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_REUSEADDR : '+str(msg))
 
-        return dhcp_socket
+        try:
+            if so_eth :
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, so_eth)
+        except (socket.error) as msg:
+            sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_BINDTODEVICE : '+str(msg))
+        except AttributeError as msg:
+            sys.stderr.write('pydhcplib.DhcpNetwork socket.SO_BINDTODEVICE undefind : '+str(msg))
+
+        return sock
 
     def BindToAddress(self, listen_address="0.0.0.0", listen_port=67):
         try :
@@ -550,42 +603,27 @@ class DHCPv6(DHCP):
 
     # Networking stuff
     def CreateSocket(self, so_broadcast, so_reuseaddr) :
-        dhcp_socket = None
-        try :
-            dhcp_socket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-        except (socket.error) as msg:
-            sys.stderr.write('pydhcplib.DhcpNetwork socket creation error : '+str(msg))
+        sock = None
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 1)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
+        return sock
 
-        try :
-            if so_broadcast :
-                dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
-        except (socket.error) as msg:
-            sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_BROADCAST : '+str(msg))
-
-        try :
-            if so_reuseaddr :
-                dhcp_socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        except (socket.error) as msg:
-            sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_REUSEADDR : '+str(msg))
-
-        return dhcp_socket
-
-    def BindToAddress(self, listen_address="0.0.0.0", listen_port=67):
-        try :
-            self.dhcp_socket.bind((listen_address, listen_port))
-        except (socket.error) as msg:
-            sys.stderr.write( 'pydhcplib.DhcpNetwork.BindToAddress error : '+str(msg))
+    def BindToAddress(self, listen_address="ff02::1:2", listen_port=547):
+        super().BindToAddress(listen_address, listen_port)
 
     def SendDhcpPacketTo(self, packet, _ip, _port):
         return self.dhcp_socket.sendto(packet,(_ip,_port))
 
-a = DHCPv6()
-print(a.deserialize(b'\x01\x00\x00\x02\x00\x01\x00\x0e\x00\x01\x00\x01\x1em|/\x00\x0c\x01\x02\x03\x04\x00\x03\x00\x0c\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x15\x18\x00\x06\x00\x04\x00\x17\x00\x18\x00\x08\x00\x02\x00\x00'))
-print(a.deserialize(b'\x0c\x01 \x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01 \x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08\x00\x02\x00\x00'))
+#a = DHCPv6()
+#print(a.deserialize(b'\x01\x00\x00\x02\x00\x01\x00\x0e\x00\x01\x00\x01\x1em|/\x00\x0c\x01\x02\x03\x04\x00\x03\x00\x0c\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x15\x18\x00\x06\x00\x04\x00\x17\x00\x18\x00\x08\x00\x02\x00\x00'))
+#print(a.deserialize(b'\x0c\x01 \x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01 \x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08\x00\x02\x00\x00'))
+#a.BindToAddress()
 
 class Client(DHCP):
-    def __init__(self, options):
-        super().__init__()
+    def __init__(self, eth, options):
+        super().__init__(eth)
         self.server = options.pop('server', '255.255.255.255')
         self.server_port = options.pop('server_port', 67)
         self.listen = options.pop('listen', '0.0.0.0')
@@ -632,15 +670,18 @@ class Client(DHCP):
 def main():
     #use encapsulated vendor-specific extensions:
     OPTION['vendor_specific'] = Option(code=43, data=_list)
-    client = Client({
+    client = Client('en0', {
             'chaddr': '00:1e:52:82:15:b7',
-#            'listen':"192.168.1.13",
-#            'server':'192.168.1.1',
+            #'listen':"192.168.10.21",
+            #'server':'192.168.10.5',
+            'server_port':67,
+            #'request_ip_address': '192.168.10.20',
 #            'client_identifier':'test123',
-            'parameter_request_list': [50, 51, 'classless_static_route'],
-            'relay_agent': {'CIRCUIT-ID':'vci', 'REMOTE-ID':'vpi'},
-            'vendor_specific': {1:'vs1', 2:'vs2'},
-            'path_mtu_table': "1000 2000",
+#            'parameter_request_list': [50, 51, 'classless_static_route'],
+            'parameter_request_list': [125],
+            #'relay_agent': {'CIRCUIT-ID':'eltex-1-1 eth 100/1:100', 'REMOTE-ID':'vpi'},
+#            'vendor_specific': {1:'vs1', 2:'vs2'},
+#            'path_mtu_table': "1000 2000",
             })
     client.SendPacket({'dhcp_message_type': 'DHCP_DISCOVER'})
     client.Wait()
