@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.5
+#!/usr/bin/env python3
 #
 # vim: tabstop=4 expandtab shiftwidth=4 softtabstop=4
 #
@@ -468,7 +468,7 @@ OPTION['vi-vendor_specific'] = Option(code=125, data=_vendorlist)
 OPTION['end'] = Option(code=255, data=None)
 
 class DHCP(object):
-    def __init__(self, eth):
+    def __init__(self, eth=None):
         self.__hook = []
         self.dhcp_socket = self.CreateSocket(True, False, eth)
 
@@ -519,11 +519,11 @@ class DHCP(object):
 
         try:
             if so_eth :
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, so_eth)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, str(so_eth + '\0').encode('utf-8'))
         except (socket.error) as msg:
             sys.stderr.write('pydhcplib.DhcpNetwork socket error in setsockopt SO_BINDTODEVICE : '+str(msg))
         except AttributeError as msg:
-            sys.stderr.write('pydhcplib.DhcpNetwork socket.SO_BINDTODEVICE undefind : '+str(msg))
+            pass
 
         return sock
 
