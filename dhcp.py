@@ -622,8 +622,8 @@ class DHCPv6(DHCP):
 #a.BindToAddress()
 
 class Client(DHCP):
-    def __init__(self, eth, options):
-        super().__init__(eth)
+    def __init__(self, options):
+        self.device = options.pop('device', None)
         self.server = options.pop('server', '255.255.255.255')
         self.server_port = options.pop('server_port', 67)
         self.listen = options.pop('listen', '0.0.0.0')
@@ -638,6 +638,8 @@ class Client(DHCP):
                 self.client_port = 67
 
         self.__lock = threading.Event()
+
+        super().__init__(self.device)
         self.AddHook(lambda packet: True, self.HandleDhcpAll)
         self.AddHook(lambda packet: packet.get('dhcp_message_type') == 'DHCP_OFFER', self.HandleDhcpOffer)
         self.AddHook(lambda packet: packet.get('dhcp_message_type') == 'DHCP_ACK', self.HandleDhcpAck)
@@ -670,18 +672,19 @@ class Client(DHCP):
 def main():
     #use encapsulated vendor-specific extensions:
     OPTION['vendor_specific'] = Option(code=43, data=_list)
-    client = Client('en0', {
+    client = Client({
+            #'device': 'eth0',
             'chaddr': '00:1e:52:82:15:b7',
             #'listen':"192.168.10.21",
             #'server':'192.168.10.5',
-            'server_port':67,
+            #'server_port':67,
             #'request_ip_address': '192.168.10.20',
-#            'client_identifier':'test123',
-#            'parameter_request_list': [50, 51, 'classless_static_route'],
-            'parameter_request_list': [125],
+            #'client_identifier':'test123',
+            #'parameter_request_list': [50, 51, 'classless_static_route'],
+            #'parameter_request_list': [125],
             #'relay_agent': {'CIRCUIT-ID':'eltex-1-1 eth 100/1:100', 'REMOTE-ID':'vpi'},
-#            'vendor_specific': {1:'vs1', 2:'vs2'},
-#            'path_mtu_table': "1000 2000",
+            #'vendor_specific': {1:'vs1', 2:'vs2'},
+            #'path_mtu_table': "1000 2000",
             })
     client.SendPacket({'dhcp_message_type': 'DHCP_DISCOVER'})
     client.Wait()
